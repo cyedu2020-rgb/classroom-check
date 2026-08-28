@@ -1,40 +1,21 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
-import sqlite3
+import io
 
 # ---------------------------------------------------------
-# 1. 페이지 및 SQLite 데이터베이스 설정
+# 1. 페이지 설정 및 초기화
 # ---------------------------------------------------------
 st.set_page_config(page_title="강의실 중복 체크 시스템", page_icon="🏫", layout="wide")
 
 st.title("🏫 사회복지현장실습 강의실 중복 체크 시스템")
-st.caption("등록·수정·삭제한 모든 일정 데이터가 자동으로 저장되어 세션이 끊겨도 데이터가 유지됩니다.")
+st.caption("수요일 개강 기준 (1주, 9주, 14주차 주말 출석) - 엑셀/CSV 일괄 업로드 지원")
 
-DB_FILE = "schedules.db"
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS schedules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            institution TEXT,
-            class_name TEXT,
-            wed_date TEXT,
-            weekend_day TEXT,
-            start_time TEXT,
-            end_time TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-# DB 초기화 실행
-init_db()
+if "schedules" not in st.session_state:
+    st.session_state.schedules = []
 
 # ---------------------------------------------------------
-# 2. 핵심 로직 함수
+# 2. 핵심 알고리즘 함수
 # ---------------------------------------------------------
 def get_attendance_dates(wed_date, weekend_day):
     offset = 3 if weekend_day == '토' else 4
@@ -44,67 +25,6 @@ def get_attendance_dates(wed_date, weekend_day):
         "9주차": first_weekend + timedelta(weeks=8),
         "14주차": first_weekend + timedelta(weeks=13)
     }
-
-def load_schedules_from_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, institution, class_name, wed_date, weekend_day, start_time, end_time FROM schedules")
-    rows = c.fetchall()
-    conn.close()
-
-    schedules = []
-    for r in rows:
-        db_id, inst, c_name, w_date_str, w_day, s_time_str, e_time_str = r
-        w_date = datetime.strptime(w_date_str, "%Y-%m-%d").date()
-        s_time = datetime.strptime(s_time_str, "%H:%M").time()
-        e_time = datetime.strptime(e_time_str, "%H:%M").time()
-
-        schedules.append({
-            "id": db_id,
-            "institution": inst,
-            "class_name": c_name,
-            "wed_date": w_date,
-            "weekend_day": w_day,
-            "start_time": s_time,
-            "end_time": e_time,
-            "dates": get_attendance_dates(w_date, w_day)
-        })
-    return schedules
-
-def add_schedule_to_db(inst, c_name, w_date, w_day, s_time, e_time):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO schedules (institution, class_name, wed_date, weekend_day, start_time, end_time)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (inst, c_name, w_date.strftime("%Y-%m-%d"), w_day, s_time.strftime("%H:%M"), e_time.strftime("%H:%M")))
-    conn.commit()
-    conn.close()
-
-def update_schedule_in_db(db_id, inst, c_name, w_date, w_day, s_time, e_time):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        UPDATE schedules
-        SET institution=?, class_name=?, wed_date=?, weekend_day=?, start_time=?, end_time=?
-        WHERE id=?
-    ''', (inst, c_name, w_date.strftime("%Y-%m-%d"), w_day, s_time.strftime("%H:%M"), e_time.strftime("%H:%M"), db_id))
-    conn.commit()
-    conn.close()
-
-def delete_schedule_from_db(db_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM schedules WHERE id=?", (db_id,))
-    conn.commit()
-    conn.close()
-
-def clear_all_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM schedules")
-    conn.commit()
-    conn.close()
 
 def check_conflicts(schedules):
     conflicts = []
@@ -138,45 +58,102 @@ def check_conflicts(schedules):
                             })
     return conflicts, conflicted_weeks
 
-# DB에서 최신 데이터 불러오기
-st.session_state.schedules = load_schedules_from_db()
-
 # ---------------------------------------------------------
-# 3. 사이드바: 신규 수업 등록
+# 3. 사이드바: 파일 일괄 업로드 & 샘플 양식 다운로드
 # ---------------------------------------------------------
-st.sidebar.header("📝 새 수업 일정 등록")
+st.sidebar.header("📂 일정 파일 일괄 등록")
 
-with st.sidebar.form("schedule_form", clear_on_submit=True):
-    institution = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"])
-    class_name = st.text_input("수업/분반 이름", placeholder="예: 실습 1반")
-    wed_date = st.date_input("개강일 선택 (수요일)", value=datetime.today())
-    weekend_day = st.radio("출석 요일", ["토", "일"], horizontal=True)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        start_time = st.time_input("시작 시간", value=datetime.strptime("09:00", "%H:%M").time())
-    with col2:
-        end_time = st.time_input("종료 시간", value=datetime.strptime("13:00", "%H:%M").time())
+# 샘플 CSV 다운로드 제공
+sample_df = pd.DataFrame([
+    {"기관": "사이에듀", "수업명": "실습 A반", "개강일": "2026-09-02", "출석요일": "토", "시작시간": "09:00", "종료시간": "13:00"},
+    {"기관": "마이에듀원격", "수업명": "실습 1반", "개강일": "2026-09-02", "출석요일": "토", "시작시간": "12:00", "종료시간": "16:00"}
+])
+sample_csv = sample_df.to_csv(index=False).encode('utf-8-sig')
 
-    submit_button = st.form_submit_button("일정 추가하기")
+st.sidebar.download_button(
+    label="📄 엑셀 작성용 샘플 양식 다운로드",
+    data=sample_csv,
+    file_name="강의실일정_샘플양식.csv",
+    mime="text/csv"
+)
 
-if submit_button:
-    if not class_name.strip():
-        st.sidebar.error("수업 이름을 입력해 주세요.")
-    elif wed_date.weekday() != 2:
-        st.sidebar.error("❌ 선택한 날짜가 수요일이 아닙니다.")
-    elif start_time >= end_time:
-        st.sidebar.error("❌ 종료 시간은 시작 시간보다 뒤여야 합니다.")
-    else:
-        add_schedule_to_db(institution, class_name, wed_date, weekend_day, start_time, end_time)
-        st.sidebar.success(f"[{institution}] '{class_name}' 일정이 저장되었습니다!")
-        st.rerun()
+st.sidebar.divider()
+
+uploaded_file = st.sidebar.file_uploader("작성한 일정 파일(.csv, .xlsx) 업로드", type=["csv", "xlsx"])
+
+if uploaded_file is not None:
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            df_upload = pd.read_csv(uploaded_file)
+        else:
+            df_upload = pd.read_excel(uploaded_file)
+
+        loaded_schedules = []
+        for idx, row in df_upload.iterrows():
+            w_date = datetime.strptime(str(row["개강일"]).strip(), "%Y-%m-%d").date()
+            
+            s_str = str(row["시작시간"]).strip()
+            e_str = str(row["종료시간"]).strip()
+            s_time = datetime.strptime(s_str if len(s_str) > 5 else s_str + ":00", "%H:%M:%S").time()
+            e_time = datetime.strptime(e_str if len(e_str) > 5 else e_str + ":00", "%H:%M:%S").time()
+
+            loaded_schedules.append({
+                "institution": str(row["기관"]).strip(),
+                "class_name": str(row["수업명"]).strip(),
+                "wed_date": w_date,
+                "weekend_day": str(row["출석요일"]).strip(),
+                "start_time": s_time,
+                "end_time": e_time,
+                "dates": get_attendance_dates(w_date, str(row["출석요일"]).strip())
+            })
+
+        st.session_state.schedules = loaded_schedules
+        st.sidebar.success(f"총 {len(loaded_schedules)}개 일정을 성공적으로 불러왔습니다!")
+
+    except Exception as e:
+        st.sidebar.error("파일 처리 중 오류가 발생했습니다. 양식을 확인해 주세요.")
+
+st.sidebar.divider()
+
+# 개별 수동 등록 폼도 함께 유지
+with st.sidebar.expander("➕ 수동으로 1개씩 일정 추가하기"):
+    with st.form("manual_form", clear_on_submit=True):
+        inst = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"])
+        c_name = st.text_input("수업/분반 이름")
+        w_date = st.date_input("개강일 선택 (수요일)", value=datetime.today())
+        w_day = st.radio("출석 요일", ["토", "일"], horizontal=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            s_time = st.time_input("시작 시간", value=datetime.strptime("09:00", "%H:%M").time())
+        with col2:
+            e_time = st.time_input("종료 시간", value=datetime.strptime("13:00", "%H:%M").time())
+        submit_btn = st.form_submit_button("추가")
+
+    if submit_btn:
+        if not c_name.strip():
+            st.sidebar.error("수업 이름을 입력하세요.")
+        elif w_date.weekday() != 2:
+            st.sidebar.error("개강일은 수요일이어야 합니다.")
+        elif s_time >= e_time:
+            st.sidebar.error("종료 시간은 시작 시간보다 뒤여야 합니다.")
+        else:
+            st.session_state.schedules.append({
+                "institution": inst,
+                "class_name": c_name,
+                "wed_date": w_date,
+                "weekend_day": w_day,
+                "start_time": s_time,
+                "end_time": e_time,
+                "dates": get_attendance_dates(w_date, w_day)
+            })
+            st.sidebar.success("일정이 추가되었습니다!")
+            st.rerun()
 
 # ---------------------------------------------------------
 # 4. 메인 화면 Display 및 중복 체크
 # ---------------------------------------------------------
 if not st.session_state.schedules:
-    st.info("👈 현재 등록된 일정이 없습니다. 사이드바에서 일정을 추가해 주세요.")
+    st.info("👈 왼쪽 사이드바에서 샘플 양식을 다운로드하여 일정을 작성한 후 업로드해 주세요.")
 else:
     conflicts, conflicted_weeks = check_conflicts(st.session_state.schedules)
     
@@ -226,63 +203,24 @@ else:
     styled_df = df.style.apply(highlight_specific_weeks, axis=1)
     st.dataframe(styled_df, column_config={"conflicted_weeks": None}, use_container_width=True)
 
-    # ---------------------------------------------------------
-    # 5. 등록 일정 수정 및 삭제 구역
-    # ---------------------------------------------------------
-    st.divider()
-    st.subheader("✏️ 등록 일정 수정 및 삭제")
-    
-    options = [f"{i+1}. [{s['institution']}] {s['class_name']}" for i, s in enumerate(st.session_state.schedules)]
-    selected_option = st.selectbox("수정 또는 삭제할 수업을 선택하세요", options)
-    
-    selected_idx = int(selected_option.split(".")[0]) - 1
-    target_schedule = st.session_state.schedules[selected_idx]
+    # 내보내기 버튼 (현재 화면 결과 다운로드)
+    export_df = pd.DataFrame([{
+        "기관": s["institution"],
+        "수업명": s["class_name"],
+        "개강일": s["wed_date"].strftime("%Y-%m-%d"),
+        "출석요일": s["weekend_day"],
+        "시작시간": s["start_time"].strftime("%H:%M"),
+        "종료시간": s["end_time"].strftime("%H:%M")
+    } for s in st.session_state.schedules])
 
-    with st.expander(f"📌 '{target_schedule['class_name']}' 상세 정보 수정", expanded=True):
-        with st.form("edit_form"):
-            edit_inst = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"], index=0 if target_schedule["institution"] == "사이에듀" else 1)
-            edit_class_name = st.text_input("수업/분반 이름", value=target_schedule["class_name"])
-            edit_wed_date = st.date_input("개강일 선택 (수요일)", value=target_schedule["wed_date"])
-            edit_weekend_day = st.radio("출석 요일", ["토", "일"], index=0 if target_schedule["weekend_day"] == "토" else 1, horizontal=True)
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                edit_start_time = st.time_input("시작 시간", value=target_schedule["start_time"])
-            with c2:
-                edit_end_time = st.time_input("종료 시간", value=target_schedule["end_time"])
-
-            col_sub1, col_sub2 = st.columns([1, 1])
-            with col_sub1:
-                update_btn = st.form_submit_button("💾 수정사항 저장")
-            with col_sub2:
-                delete_btn = st.form_submit_button("🗑️ 해당 수업 삭제", type="primary")
-
-        if update_btn:
-            if not edit_class_name.strip():
-                st.error("수업 이름을 입력해 주세요.")
-            elif edit_wed_date.weekday() != 2:
-                st.error("❌ 개강일은 수요일이어야 합니다.")
-            elif edit_start_time >= edit_end_time:
-                st.error("❌ 종료 시간은 시작 시간보다 뒤여야 합니다.")
-            else:
-                update_schedule_in_db(
-                    target_schedule["id"],
-                    edit_inst,
-                    edit_class_name,
-                    edit_wed_date,
-                    edit_weekend_day,
-                    edit_start_time,
-                    edit_end_time
-                )
-                st.success("수정사항이 저장되었습니다!")
-                st.rerun()
-
-        if delete_btn:
-            delete_schedule_from_db(target_schedule["id"])
-            st.success("수업이 삭제되었습니다.")
-            st.rerun()
+    st.download_button(
+        label="📥 현재 종합 일정 파일로 다운로드하기",
+        data=export_df.to_csv(index=False).encode('utf-8-sig'),
+        file_name="종합_강의실일정.csv",
+        mime="text/csv"
+    )
 
     st.write("")
     if st.button("🚨 전체 일정 초기화"):
-        clear_all_db()
+        st.session_state.schedules = []
         st.rerun()
