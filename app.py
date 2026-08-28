@@ -1,31 +1,111 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
+import sqlite3
 
-# 페이지 설정
+# ---------------------------------------------------------
+# 1. 페이지 및 SQLite 데이터베이스 설정
+# ---------------------------------------------------------
 st.set_page_config(page_title="강의실 중복 체크 시스템", page_icon="🏫", layout="wide")
 
 st.title("🏫 사회복지현장실습 강의실 중복 체크 시스템")
-st.caption("수요일 개강 기준 (1주, 9주, 14주차 주말 출석) 강의실 사용 일정 충돌을 자동 검사합니다.")
+st.caption("등록·수정·삭제한 모든 일정 데이터가 자동으로 저장되어 세션이 끊겨도 데이터가 유지됩니다.")
 
-# 세션 상태 초기화
-if "schedules" not in st.session_state:
-    st.session_state.schedules = []
+DB_FILE = "schedules.db"
 
-# 출석일 계산 함수
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            institution TEXT,
+            class_name TEXT,
+            wed_date TEXT,
+            weekend_day TEXT,
+            start_time TEXT,
+            end_time TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# DB 초기화 실행
+init_db()
+
+# ---------------------------------------------------------
+# 2. 핵심 로직 함수
+# ---------------------------------------------------------
 def get_attendance_dates(wed_date, weekend_day):
     offset = 3 if weekend_day == '토' else 4
     first_weekend = wed_date + timedelta(days=offset)
-    week_1 = first_weekend
-    week_9 = first_weekend + timedelta(weeks=8)
-    week_14 = first_weekend + timedelta(weeks=13)
     return {
-        "1주차": week_1,
-        "9주차": week_9,
-        "14주차": week_14
+        "1주차": first_weekend,
+        "9주차": first_weekend + timedelta(weeks=8),
+        "14주차": first_weekend + timedelta(weeks=13)
     }
 
-# 중복 검사 함수
+def load_schedules_from_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, institution, class_name, wed_date, weekend_day, start_time, end_time FROM schedules")
+    rows = c.fetchall()
+    conn.close()
+
+    schedules = []
+    for r in rows:
+        db_id, inst, c_name, w_date_str, w_day, s_time_str, e_time_str = r
+        w_date = datetime.strptime(w_date_str, "%Y-%m-%d").date()
+        s_time = datetime.strptime(s_time_str, "%H:%M").time()
+        e_time = datetime.strptime(e_time_str, "%H:%M").time()
+
+        schedules.append({
+            "id": db_id,
+            "institution": inst,
+            "class_name": c_name,
+            "wed_date": w_date,
+            "weekend_day": w_day,
+            "start_time": s_time,
+            "end_time": e_time,
+            "dates": get_attendance_dates(w_date, w_day)
+        })
+    return schedules
+
+def add_schedule_to_db(inst, c_name, w_date, w_day, s_time, e_time):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO schedules (institution, class_name, wed_date, weekend_day, start_time, end_time)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (inst, c_name, w_date.strftime("%Y-%m-%d"), w_day, s_time.strftime("%H:%M"), e_time.strftime("%H:%M")))
+    conn.commit()
+    conn.close()
+
+def update_schedule_in_db(db_id, inst, c_name, w_date, w_day, s_time, e_time):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE schedules
+        SET institution=?, class_name=?, wed_date=?, weekend_day=?, start_time=?, end_time=?
+        WHERE id=?
+    ''', (inst, c_name, w_date.strftime("%Y-%m-%d"), w_day, s_time.strftime("%H:%M"), e_time.strftime("%H:%M"), db_id))
+    conn.commit()
+    conn.close()
+
+def delete_schedule_from_db(db_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM schedules WHERE id=?", (db_id,))
+    conn.commit()
+    conn.close()
+
+def clear_all_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM schedules")
+    conn.commit()
+    conn.close()
+
 def check_conflicts(schedules):
     conflicts = []
     conflicted_weeks = {i: set() for i in range(len(schedules))}
@@ -58,8 +138,11 @@ def check_conflicts(schedules):
                             })
     return conflicts, conflicted_weeks
 
+# DB에서 최신 데이터 불러오기
+st.session_state.schedules = load_schedules_from_db()
+
 # ---------------------------------------------------------
-# 사이드바: 신규 수업 일정 등록 폼
+# 3. 사이드바: 신규 수업 등록
 # ---------------------------------------------------------
 st.sidebar.header("📝 새 수업 일정 등록")
 
@@ -85,23 +168,15 @@ if submit_button:
     elif start_time >= end_time:
         st.sidebar.error("❌ 종료 시간은 시작 시간보다 뒤여야 합니다.")
     else:
-        dates_dict = get_attendance_dates(wed_date, weekend_day)
-        st.session_state.schedules.append({
-            "institution": institution,
-            "class_name": class_name,
-            "wed_date": wed_date,
-            "weekend_day": weekend_day,
-            "start_time": start_time,
-            "end_time": end_time,
-            "dates": dates_dict
-        })
-        st.sidebar.success(f"[{institution}] '{class_name}' 일정이 추가되었습니다!")
+        add_schedule_to_db(institution, class_name, wed_date, weekend_day, start_time, end_time)
+        st.sidebar.success(f"[{institution}] '{class_name}' 일정이 저장되었습니다!")
+        st.rerun()
 
 # ---------------------------------------------------------
-# 메인 화면 Display
+# 4. 메인 화면 Display 및 중복 체크
 # ---------------------------------------------------------
 if not st.session_state.schedules:
-    st.info("👈 왼쪽 사이드바에서 개강일과 수업 시간을 등록해 주세요.")
+    st.info("👈 현재 등록된 일정이 없습니다. 사이드바에서 일정을 추가해 주세요.")
 else:
     conflicts, conflicted_weeks = check_conflicts(st.session_state.schedules)
     
@@ -152,7 +227,7 @@ else:
     st.dataframe(styled_df, column_config={"conflicted_weeks": None}, use_container_width=True)
 
     # ---------------------------------------------------------
-    # ✏️ 등록 일정 수정 및 삭제 구역
+    # 5. 등록 일정 수정 및 삭제 구역
     # ---------------------------------------------------------
     st.divider()
     st.subheader("✏️ 등록 일정 수정 및 삭제")
@@ -190,24 +265,24 @@ else:
             elif edit_start_time >= edit_end_time:
                 st.error("❌ 종료 시간은 시작 시간보다 뒤여야 합니다.")
             else:
-                st.session_state.schedules[selected_idx] = {
-                    "institution": edit_inst,
-                    "class_name": edit_class_name,
-                    "wed_date": edit_wed_date,
-                    "weekend_day": edit_weekend_day,
-                    "start_time": edit_start_time,
-                    "end_time": edit_end_time,
-                    "dates": get_attendance_dates(edit_wed_date, edit_weekend_day)
-                }
-                st.success("수정이 완료되었습니다!")
+                update_schedule_in_db(
+                    target_schedule["id"],
+                    edit_inst,
+                    edit_class_name,
+                    edit_wed_date,
+                    edit_weekend_day,
+                    edit_start_time,
+                    edit_end_time
+                )
+                st.success("수정사항이 저장되었습니다!")
                 st.rerun()
 
         if delete_btn:
-            del st.session_state.schedules[selected_idx]
+            delete_schedule_from_db(target_schedule["id"])
             st.success("수업이 삭제되었습니다.")
             st.rerun()
 
     st.write("")
     if st.button("🚨 전체 일정 초기화"):
-        st.session_state.schedules = []
+        clear_all_db()
         st.rerun()
