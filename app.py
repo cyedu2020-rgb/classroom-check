@@ -1,7 +1,6 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
-import io
 
 # ---------------------------------------------------------
 # 1. 페이지 설정 및 초기화
@@ -9,7 +8,7 @@ import io
 st.set_page_config(page_title="강의실 중복 체크 시스템", page_icon="🏫", layout="wide")
 
 st.title("🏫 사회복지현장실습 강의실 중복 체크 시스템")
-st.caption("수요일 개강 기준 (1주, 9주, 14주차 주말 출석) - 엑셀/CSV 일괄 업로드 지원")
+st.caption("수요일 개강 기준 (1주, 9주, 14주차 주말 출석) - 엑셀 업로드 및 개별 수정/삭제 지원")
 
 if "schedules" not in st.session_state:
     st.session_state.schedules = []
@@ -59,11 +58,11 @@ def check_conflicts(schedules):
     return conflicts, conflicted_weeks
 
 # ---------------------------------------------------------
-# 3. 사이드바: 파일 일괄 업로드 & 샘플 양식 다운로드
+# 3. 사이드바: 엑셀 파일 일괄 업로드 및 샘플 다운로드
 # ---------------------------------------------------------
 st.sidebar.header("📂 일정 파일 일괄 등록")
 
-# 샘플 CSV 다운로드 제공
+# 샘플 파일 제공
 sample_df = pd.DataFrame([
     {"기관": "사이에듀", "수업명": "실습 A반", "개강일": "2026-09-02", "출석요일": "토", "시작시간": "09:00", "종료시간": "13:00"},
     {"기관": "마이에듀원격", "수업명": "실습 1반", "개강일": "2026-09-02", "출석요일": "토", "시작시간": "12:00", "종료시간": "16:00"}
@@ -115,7 +114,7 @@ if uploaded_file is not None:
 
 st.sidebar.divider()
 
-# 개별 수동 등록 폼도 함께 유지
+# 수동 등록 지원
 with st.sidebar.expander("➕ 수동으로 1개씩 일정 추가하기"):
     with st.form("manual_form", clear_on_submit=True):
         inst = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"])
@@ -153,7 +152,7 @@ with st.sidebar.expander("➕ 수동으로 1개씩 일정 추가하기"):
 # 4. 메인 화면 Display 및 중복 체크
 # ---------------------------------------------------------
 if not st.session_state.schedules:
-    st.info("👈 왼쪽 사이드바에서 샘플 양식을 다운로드하여 일정을 작성한 후 업로드해 주세요.")
+    st.info("👈 왼쪽 사이드바에서 엑셀 파일(.csv, .xlsx)을 업로드하거나 수동으로 일정을 등록해 주세요.")
 else:
     conflicts, conflicted_weeks = check_conflicts(st.session_state.schedules)
     
@@ -203,7 +202,64 @@ else:
     styled_df = df.style.apply(highlight_specific_weeks, axis=1)
     st.dataframe(styled_df, column_config={"conflicted_weeks": None}, use_container_width=True)
 
-    # 내보내기 버튼 (현재 화면 결과 다운로드)
+    # ---------------------------------------------------------
+    # 5. ✏️ 등록 일정 개별 수정 및 삭제 구역
+    # ---------------------------------------------------------
+    st.divider()
+    st.subheader("✏️ 등록 일정 개별 수정 및 삭제")
+    
+    options = [f"{i+1}. [{s['institution']}] {s['class_name']}" for i, s in enumerate(st.session_state.schedules)]
+    selected_option = st.selectbox("수정 또는 삭제할 수업을 선택하세요", options)
+    
+    selected_idx = int(selected_option.split(".")[0]) - 1
+    target_schedule = st.session_state.schedules[selected_idx]
+
+    with st.expander(f"📌 '{target_schedule['class_name']}' 상세 정보 수정", expanded=True):
+        with st.form("edit_form"):
+            edit_inst = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"], index=0 if target_schedule["institution"] == "사이에듀" else 1)
+            edit_class_name = st.text_input("수업/분반 이름", value=target_schedule["class_name"])
+            edit_wed_date = st.date_input("개강일 선택 (수요일)", value=target_schedule["wed_date"])
+            edit_weekend_day = st.radio("출석 요일", ["토", "일"], index=0 if target_schedule["weekend_day"] == "토" else 1, horizontal=True)
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                edit_start_time = st.time_input("시작 시간", value=target_schedule["start_time"])
+            with c2:
+                edit_end_time = st.time_input("종료 시간", value=target_schedule["end_time"])
+
+            col_sub1, col_sub2 = st.columns([1, 1])
+            with col_sub1:
+                update_btn = st.form_submit_button("💾 수정사항 저장")
+            with col_sub2:
+                delete_btn = st.form_submit_button("🗑️ 해당 수업 삭제", type="primary")
+
+        if update_btn:
+            if not edit_class_name.strip():
+                st.error("수업 이름을 입력해 주세요.")
+            elif edit_wed_date.weekday() != 2:
+                st.error("❌ 개강일은 수요일이어야 합니다.")
+            elif edit_start_time >= edit_end_time:
+                st.error("❌ 종료 시간은 시작 시간보다 뒤여야 합니다.")
+            else:
+                st.session_state.schedules[selected_idx] = {
+                    "institution": edit_inst,
+                    "class_name": edit_class_name,
+                    "wed_date": edit_wed_date,
+                    "weekend_day": edit_weekend_day,
+                    "start_time": edit_start_time,
+                    "end_time": edit_end_time,
+                    "dates": get_attendance_dates(edit_wed_date, edit_weekend_day)
+                }
+                st.success("수정사항이 저장되고 중복 체크가 재실행되었습니다!")
+                st.rerun()
+
+        if delete_btn:
+            del st.session_state.schedules[selected_idx]
+            st.success("수업이 삭제되었습니다.")
+            st.rerun()
+
+    # 수정이 끝난 종합 파일 다운로드 기능
+    st.divider()
     export_df = pd.DataFrame([{
         "기관": s["institution"],
         "수업명": s["class_name"],
@@ -214,9 +270,9 @@ else:
     } for s in st.session_state.schedules])
 
     st.download_button(
-        label="📥 현재 종합 일정 파일로 다운로드하기",
+        label="📥 수정 완료된 종합 일정 파일로 다운로드하기",
         data=export_df.to_csv(index=False).encode('utf-8-sig'),
-        file_name="종합_강의실일정.csv",
+        file_name="최종_강의실일정.csv",
         mime="text/csv"
     )
 
