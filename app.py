@@ -25,10 +25,9 @@ def get_attendance_dates(wed_date, weekend_day):
         "14주차": week_14
     }
 
-# 중복 검사 함수 (각 인덱스별 중복되는 주차 정보 추적)
+# 중복 검사 함수
 def check_conflicts(schedules):
     conflicts = []
-    # 예: {0: {'1주차'}, 1: {'9주차'}}
     conflicted_weeks = {i: set() for i in range(len(schedules))}
     num_schedules = len(schedules)
 
@@ -37,11 +36,9 @@ def check_conflicts(schedules):
             sch1 = schedules[i]
             sch2 = schedules[j]
 
-            # 두 수강 건의 각 주차별 날짜 비교
             for week_label1, date1 in sch1["dates"].items():
                 for week_label2, date2 in sch2["dates"].items():
                     if date1 == date2:
-                        # 날짜가 동일할 때 시간대 교집합 체크
                         latest_start = max(sch1["start_time"], sch2["start_time"])
                         earliest_end = min(sch1["end_time"], sch2["end_time"])
 
@@ -61,7 +58,9 @@ def check_conflicts(schedules):
                             })
     return conflicts, conflicted_weeks
 
-# 사이드바 입력 폼
+# ---------------------------------------------------------
+# 사이드바: 신규 수업 일정 등록 폼
+# ---------------------------------------------------------
 st.sidebar.header("📝 새 수업 일정 등록")
 
 with st.sidebar.form("schedule_form", clear_on_submit=True):
@@ -98,7 +97,9 @@ if submit_button:
         })
         st.sidebar.success(f"[{institution}] '{class_name}' 일정이 추가되었습니다!")
 
-# 메인 화면
+# ---------------------------------------------------------
+# 메인 화면 Display
+# ---------------------------------------------------------
 if not st.session_state.schedules:
     st.info("👈 왼쪽 사이드바에서 개강일과 수업 시간을 등록해 주세요.")
 else:
@@ -131,34 +132,82 @@ else:
             "1주차 출석일": item["dates"]["1주차"].strftime("%Y-%m-%d"),
             "9주차 출석일": item["dates"]["9주차"].strftime("%Y-%m-%d"),
             "14주차 출석일": item["dates"]["14주차"].strftime("%Y-%m-%d"),
-            "conflicted_weeks": list(conflicted_weeks[idx])  # 해당 행의 중복 주차 리스트
+            "conflicted_weeks": list(conflicted_weeks[idx])
         })
     
     df = pd.DataFrame(display_data)
 
-    # 중복되는 주차의 칸에만 빨간색 하이라이트 적용
     def highlight_specific_weeks(row):
         styles = [''] * len(row)
         c_weeks = row['conflicted_weeks']
-        
-        target_cols = {
-            "1주차": "1주차 출석일",
-            "9주차": "9주차 출석일",
-            "14주차": "14주차 출석일"
-        }
+        target_cols = {"1주차": "1주차 출석일", "9주차": "9주차 출석일", "14주차": "14주차 출석일"}
         
         for w_label, col_name in target_cols.items():
             if w_label in c_weeks:
                 col_idx = row.index.get_loc(col_name)
                 styles[col_idx] = 'background-color: #ff4b4b; color: white; font-weight: bold;'
-                
         return styles
 
     styled_df = df.style.apply(highlight_specific_weeks, axis=1)
-
-    # 화면에 출력 (내부 판별용 conflicted_weeks 열은 숨김)
     st.dataframe(styled_df, column_config={"conflicted_weeks": None}, use_container_width=True)
 
-    if st.button("전체 일정 초기화"):
+    # ---------------------------------------------------------
+    # ✏️ 등록 일정 수정 및 삭제 구역
+    # ---------------------------------------------------------
+    st.divider()
+    st.subheader("✏️ 등록 일정 수정 및 삭제")
+    
+    options = [f"{i+1}. [{s['institution']}] {s['class_name']}" for i, s in enumerate(st.session_state.schedules)]
+    selected_option = st.selectbox("수정 또는 삭제할 수업을 선택하세요", options)
+    
+    selected_idx = int(selected_option.split(".")[0]) - 1
+    target_schedule = st.session_state.schedules[selected_idx]
+
+    with st.expander(f"📌 '{target_schedule['class_name']}' 상세 정보 수정", expanded=True):
+        with st.form("edit_form"):
+            edit_inst = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"], index=0 if target_schedule["institution"] == "사이에듀" else 1)
+            edit_class_name = st.text_input("수업/분반 이름", value=target_schedule["class_name"])
+            edit_wed_date = st.date_input("개강일 선택 (수요일)", value=target_schedule["wed_date"])
+            edit_weekend_day = st.radio("출석 요일", ["토", "일"], index=0 if target_schedule["weekend_day"] == "토" else 1, horizontal=True)
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                edit_start_time = st.time_input("시작 시간", value=target_schedule["start_time"])
+            with c2:
+                edit_end_time = st.time_input("종료 시간", value=target_schedule["end_time"])
+
+            col_sub1, col_sub2 = st.columns([1, 1])
+            with col_sub1:
+                update_btn = st.form_submit_button("💾 수정사항 저장")
+            with col_sub2:
+                delete_btn = st.form_submit_button("🗑️ 해당 수업 삭제", type="primary")
+
+        if update_btn:
+            if not edit_class_name.strip():
+                st.error("수업 이름을 입력해 주세요.")
+            elif edit_wed_date.weekday() != 2:
+                st.error("❌ 개강일은 수요일이어야 합니다.")
+            elif edit_start_time >= edit_end_time:
+                st.error("❌ 종료 시간은 시작 시간보다 뒤여야 합니다.")
+            else:
+                st.session_state.schedules[selected_idx] = {
+                    "institution": edit_inst,
+                    "class_name": edit_class_name,
+                    "wed_date": edit_wed_date,
+                    "weekend_day": edit_weekend_day,
+                    "start_time": edit_start_time,
+                    "end_time": edit_end_time,
+                    "dates": get_attendance_dates(edit_wed_date, edit_weekend_day)
+                }
+                st.success("수정이 완료되었습니다!")
+                st.rerun()
+
+        if delete_btn:
+            del st.session_state.schedules[selected_idx]
+            st.success("수업이 삭제되었습니다.")
+            st.rerun()
+
+    st.write("")
+    if st.button("🚨 전체 일정 초기화"):
         st.session_state.schedules = []
         st.rerun()
