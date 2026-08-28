@@ -8,10 +8,13 @@ import pandas as pd
 st.set_page_config(page_title="강의실 중복 체크 시스템", page_icon="🏫", layout="wide")
 
 st.title("🏫 사회복지현장실습 강의실 중복 체크 시스템")
-st.caption("수요일 개강 기준 (1주, 9주, 14주차 주말 출석) - 엑셀 업로드 및 개별 수정/삭제 지원")
+st.caption("수요일 개강 기준 (1주, 9주, 14주차 주말 출석) - 엑셀 업로드 및 개별 수정/삭제 완벽 지원")
 
 if "schedules" not in st.session_state:
     st.session_state.schedules = []
+
+if "uploaded_file_name" not in st.session_state:
+    st.session_state.uploaded_file_name = None
 
 # ---------------------------------------------------------
 # 2. 핵심 알고리즘 함수
@@ -80,7 +83,8 @@ st.sidebar.divider()
 
 uploaded_file = st.sidebar.file_uploader("작성한 일정 파일(.csv, .xlsx) 업로드", type=["csv", "xlsx"])
 
-if uploaded_file is not None:
+# 파일이 새로 업로드 되었을 때만 세션 상태 초기화 및 파싱
+if uploaded_file is not None and st.session_state.uploaded_file_name != uploaded_file.name:
     try:
         if uploaded_file.name.endswith(".csv"):
             df_upload = pd.read_csv(uploaded_file)
@@ -107,7 +111,8 @@ if uploaded_file is not None:
             })
 
         st.session_state.schedules = loaded_schedules
-        st.sidebar.success(f"총 {len(loaded_schedules)}개 일정을 성공적으로 불러왔습니다!")
+        st.session_state.uploaded_file_name = uploaded_file.name
+        st.sidebar.success(f"총 {len(loaded_schedules)}개 일정을 불러왔습니다!")
 
     except Exception as e:
         st.sidebar.error("파일 처리 중 오류가 발생했습니다. 양식을 확인해 주세요.")
@@ -250,7 +255,7 @@ else:
                     "end_time": edit_end_time,
                     "dates": get_attendance_dates(edit_wed_date, edit_weekend_day)
                 }
-                st.success("수정사항이 저장되고 중복 체크가 재실행되었습니다!")
+                st.success("수정사항이 완벽히 저장되었습니다!")
                 st.rerun()
 
         if delete_btn:
@@ -279,4 +284,5 @@ else:
     st.write("")
     if st.button("🚨 전체 일정 초기화"):
         st.session_state.schedules = []
+        st.session_state.uploaded_file_name = None
         st.rerun()
