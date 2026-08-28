@@ -64,7 +64,7 @@ def check_conflicts(schedules):
 st.sidebar.header("📝 새 수업 일정 등록")
 
 with st.sidebar.form("schedule_form", clear_on_submit=True):
-    institution = st.selectbox("기관 선택", ["A기관", "B기관"])
+    institution = st.selectbox("기관 선택", ["사이에듀", "마이에듀원격"])
     class_name = st.text_input("수업/분반 이름", placeholder="예: 실습 1반")
     
     wed_date = st.date_input("개강일 선택 (수요일)", value=datetime.today())
